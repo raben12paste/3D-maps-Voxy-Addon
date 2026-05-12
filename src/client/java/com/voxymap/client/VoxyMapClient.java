@@ -1,9 +1,7 @@
 package com.voxymap.client;
 
 import com.voxymap.client.gui.MapScreen;
-import com.voxymap.client.gui.WaypointHudRenderer;
 import com.voxymap.client.map.MapDataManager;
-import com.voxymap.client.map.WaypointManager;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -11,7 +9,6 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -26,7 +23,6 @@ public class VoxyMapClient implements ClientModInitializer {
 
     public static KeyMapping openMapKey;
     public static MapDataManager mapDataManager;
-    public static WaypointManager waypointManager;
     public static volatile boolean debugLogging = false;
 
     @Override
@@ -35,7 +31,7 @@ public class VoxyMapClient implements ClientModInitializer {
 
         // Register keybinding category and key
         KeyMapping.Category voxyMapCategory = KeyMapping.Category.register(
-                Identifier.withDefaultNamespace("voxymap")
+                Identifier.fromNamespaceAndPath(MOD_ID, "main")
         );
 
         openMapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
@@ -47,8 +43,6 @@ public class VoxyMapClient implements ClientModInitializer {
 
         // Initialize map data manager
         mapDataManager = new MapDataManager();
-        waypointManager = new WaypointManager();
-        HudRenderCallback.EVENT.register((graphics, deltaTracker) -> WaypointHudRenderer.render(graphics));
         registerClientCommands();
 
         // Tick events

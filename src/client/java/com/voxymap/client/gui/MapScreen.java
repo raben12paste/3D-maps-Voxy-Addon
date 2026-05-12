@@ -6,22 +6,17 @@ import com.voxymap.client.map.MapDataManager;
 import com.voxymap.client.map.BlockColorTable;
 import com.voxymap.client.map.VoxyBridge;
 import com.voxymap.client.map.VoxyMapCameraController;
-import com.voxymap.client.map.Waypoint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
-import net.minecraft.world.level.levelgen.Heightmap;
 import org.lwjgl.glfw.GLFW;
-import org.lwjgl.opengl.GL11;
-import org.joml.Matrix4f;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -53,7 +48,6 @@ public class MapScreen extends Screen {
     private static final double BASE_HEIGHT = 63.0;
     private static final boolean ALLOW_UNSAFE_NATIVE_VOXY_RENDERER = false;
     private static final long OPEN_ANIMATION_NANOS = 850_000_000L;
-    private static final long DOUBLE_CLICK_WINDOW_MS = 360L;
     private static boolean warnedUntestedVoxyVersion = false;
 
     // View state
@@ -66,6 +60,7 @@ public class MapScreen extends Screen {
     private boolean useNativeVoxyRenderer = false;
     private boolean nativeRendererFailed = false;
     private long lastNativeRendererWarning = 0L;
+    private long lastEndDebugLog = 0L;
 
     // Drag state
     private boolean dragging = false;
@@ -79,22 +74,6 @@ public class MapScreen extends Screen {
     private double pitchVelocity = 0.0;
     private long lastFrameNanos = 0L;
     private long openedAtNanos = 0L;
-    private long lastLeftClickMillis = 0L;
-    private double lastLeftClickX = 0.0;
-    private double lastLeftClickY = 0.0;
-    private boolean pendingWaypoint = false;
-    private double pendingWaypointX;
-    private double pendingWaypointY;
-    private double pendingWaypointZ;
-    private String pendingWaypointName = "";
-    private int selectedWaypointIndex = -1;
-    private boolean waypointPanelHidden = false;
-    private boolean editingSelectedWaypointName = false;
-    private String selectedWaypointNameDraft = "";
-    private int selectedNameBoxX;
-    private int selectedNameBoxY;
-    private int selectedNameBoxW;
-    private int selectedNameBoxH;
 
     private final MapDataManager data;
 
@@ -118,7 +97,11 @@ public class MapScreen extends Screen {
             viewCenterX = minecraft.player.getX();
             viewCenterZ = minecraft.player.getZ();
         }
-        syncWorldCamera();
+        if (!isUnsupportedDimension()) {
+            syncWorldCamera();
+        } else {
+            VoxyMapCameraController.deactivate();
+        }
         createTexture();
         if (!VoxyBridge.isVoxyPresent() && minecraft.player != null) {
             minecraft.player.displayClientMessage(Component.translatable("message.voxymap.voxy_missing"), false);
@@ -151,12 +134,20 @@ public class MapScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float delta) {
+        if (isUnsupportedDimension()) {
+            VoxyMapCameraController.deactivate();
+            drawUnsupportedDimension(g);
+            drawOpeningAnimation(g);
+            super.render(g, mouseX, mouseY, delta);
+            return;
+        }
+
         updateSmoothControls();
         syncWorldCamera();
-        drawMapWaypoints(g);
+        if (isEndDimension()) {
+            logEndRenderDebug();
+        }
         drawWorldViewerOverlay(g);
-        drawWaypointPanel(g);
-        drawWaypointDialog(g);
         drawOpeningAnimation(g);
         super.render(g, mouseX, mouseY, delta);
     }
@@ -174,14 +165,6 @@ public class MapScreen extends Screen {
         long now = System.nanoTime();
         double dt = lastFrameNanos == 0L ? 1.0 / 60.0 : Math.min(0.08, (now - lastFrameNanos) / 1_000_000_000.0);
         lastFrameNanos = now;
-
-        if (pendingWaypoint || editingSelectedWaypointName) {
-            moveVelocityX = 0.0;
-            moveVelocityZ = 0.0;
-            yawVelocity = 0.0;
-            pitchVelocity = 0.0;
-            return;
-        }
 
         long window = minecraft.getWindow().handle();
         double forwardInput = keyDown(window, GLFW.GLFW_KEY_W) ? 1.0 : 0.0;
@@ -227,7 +210,44 @@ public class MapScreen extends Screen {
     }
 
     private void syncWorldCamera() {
+        if (isUnsupportedDimension()) {
+            VoxyMapCameraController.deactivate();
+            return;
+        }
         VoxyMapCameraController.update(minecraft, viewCenterX, viewCenterZ, viewYaw, viewPitch, blocksPerPixel);
+    }
+
+    private boolean isUnsupportedDimension() {
+        if (minecraft == null || minecraft.level == null) return false;
+        String dimension = minecraft.level.dimension().identifier().toString();
+        return "minecraft:the_nether".equals(dimension) || "minecraft:the_end".equals(dimension);
+    }
+
+    private boolean isEndDimension() {
+        return minecraft != null && minecraft.level != null
+                && "minecraft:the_end".equals(minecraft.level.dimension().identifier().toString());
+    }
+
+    private void drawUnsupportedDimension(GuiGraphics g) {
+        g.fill(0, 0, width, height, BG);
+        int boxW = Math.min(width - 40, 420);
+        int boxH = 112;
+        int x = (width - boxW) / 2;
+        int y = (height - boxH) / 2;
+        g.fill(x - 2, y - 2, x + boxW + 2, y + boxH + 2, 0x553BA4FF);
+        g.fill(x, y, x + boxW, y + boxH, 0xEE030914);
+        g.fill(x, y, x + 4, y + boxH, 0xFF3BA4FF);
+        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.unsupported.title"), width / 2, y + 22, 0xFFFFFFFF);
+        g.drawCenteredString(minecraft.font, Component.translatable(unsupportedDimensionMessageKey()), width / 2, y + 46, 0xFFBFD8FF);
+        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.unsupported.close"), width / 2, y + 74, 0xFF8EE6FF);
+    }
+
+    private String unsupportedDimensionMessageKey() {
+        if (minecraft != null && minecraft.level != null
+                && "minecraft:the_end".equals(minecraft.level.dimension().identifier().toString())) {
+            return "screen.voxymap.unsupported.end";
+        }
+        return "screen.voxymap.unsupported.nether";
     }
 
     private void drawOpeningAnimation(GuiGraphics g) {
@@ -256,66 +276,40 @@ public class MapScreen extends Screen {
         }
     }
 
-    private boolean drawNativeVoxy(GuiGraphics g, int mapLeft, int mapTop, int mapDrawSize) {
-        if (minecraft == null || minecraft.player == null) return false;
+    private void logEndRenderDebug() {
+        if (!VoxyMapClient.debugLogging || minecraft == null || minecraft.player == null || minecraft.level == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastEndDebugLog < 5000L) {
+            return;
+        }
+        lastEndDebugLog = now;
 
+        String voxyRender = "unknown";
         try {
             Class<?> getterClass = Class.forName("me.cortex.voxy.client.core.IGetVoxyRenderSystem");
             Object renderSystem = getterClass.getDeclaredMethod("getNullable").invoke(null);
-            if (renderSystem == null) return false;
-
-            double scale = minecraft.getWindow().getGuiScale();
-            int framebufferHeight = minecraft.getWindow().getHeight();
-            int vx = (int) Math.round(mapLeft * scale);
-            int vy = (int) Math.round(framebufferHeight - (mapTop + mapDrawSize) * scale);
-            int vw = (int) Math.round(mapDrawSize * scale);
-            int vh = (int) Math.round(mapDrawSize * scale);
-            if (vw <= 0 || vh <= 0) return false;
-
-            float aspect = vw / (float) vh;
-            Matrix4f projection = new Matrix4f().perspective((float) Math.toRadians(70.0), aspect, 0.05f, 1_000_000.0f);
-            Matrix4f modelView = new Matrix4f()
-                    .rotateX((float) (Math.PI / 2.0 - Math.max(0.08, viewPitch)))
-                    .rotateY((float) viewYaw);
-
-            double cameraDistance = Math.max(96.0, blocksPerPixel * mapDrawSize * 0.55);
-            double cameraY = minecraft.player.getY() + cameraDistance * 0.72;
-            double cameraX = viewCenterX - Math.sin(viewYaw) * cameraDistance * 0.35;
-            double cameraZ = viewCenterZ - Math.cos(viewYaw) * cameraDistance * 0.35;
-
-            Class<?> matricesClass = Class.forName("net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices");
-            Object matrices = matricesClass
-                    .getDeclaredConstructor(org.joml.Matrix4fc.class, org.joml.Matrix4fc.class)
-                    .newInstance(projection, modelView);
-            Class<?> fogClass = Class.forName("net.caffeinemc.mods.sodium.client.util.FogParameters");
-            Object fogNone = fogClass.getDeclaredField("NONE").get(null);
-
-            GL11.glEnable(GL11.GL_SCISSOR_TEST);
-            GL11.glViewport(vx, vy, vw, vh);
-            GL11.glScissor(vx, vy, vw, vh);
-            GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
-
-            Object viewport = renderSystem.getClass()
-                    .getDeclaredMethod("setupViewport", matricesClass, fogClass, double.class, double.class, double.class)
-                    .invoke(renderSystem, matrices, fogNone, cameraX, cameraY, cameraZ);
-            renderSystem.getClass()
-                    .getDeclaredMethod("renderOpaque", Class.forName("me.cortex.voxy.client.core.rendering.Viewport"))
-                    .invoke(renderSystem, viewport);
-
-            GL11.glDisable(GL11.GL_SCISSOR_TEST);
-            GL11.glViewport(0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight());
-            return true;
+            voxyRender = renderSystem == null ? "null" : renderSystem.getClass().getName();
         } catch (Throwable t) {
-            GL11.glDisable(GL11.GL_SCISSOR_TEST);
-            GL11.glViewport(0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight());
-            long now = System.currentTimeMillis();
-            if (now - lastNativeRendererWarning > 5000L) {
-                VoxyMapClient.LOGGER.warn("[VoxyMap] Native Voxy renderer preview failed, falling back to debug map: {}", t.toString());
-                lastNativeRendererWarning = now;
-            }
-            nativeRendererFailed = true;
-            return false;
+            voxyRender = t.getClass().getSimpleName() + ":" + t.getMessage();
         }
+
+        int camChunkX = Mth.floor(VoxyMapCameraController.cameraX()) >> 4;
+        int camChunkZ = Mth.floor(VoxyMapCameraController.cameraZ()) >> 4;
+        int centerChunkX = Mth.floor(viewCenterX) >> 4;
+        int centerChunkZ = Mth.floor(viewCenterZ) >> 4;
+        VoxyMapClient.LOGGER.info("[VoxyMap] end render debug: active={}, player=({}, {}, {}), center=({}, {}), camera=({}, {}, {}), yaw={}, pitch={}, fov={}, zoom={}, centerChunkLoaded={}, cameraChunkLoaded={}, skyDarken={}, voxyRender={}, data={}",
+                VoxyMapCameraController.isActive(),
+                (int) minecraft.player.getX(), (int) minecraft.player.getY(), (int) minecraft.player.getZ(),
+                (int) viewCenterX, (int) viewCenterZ,
+                (int) VoxyMapCameraController.cameraX(), (int) VoxyMapCameraController.cameraY(), (int) VoxyMapCameraController.cameraZ(),
+                VoxyMapCameraController.cameraYaw(), VoxyMapCameraController.cameraPitch(), VoxyMapCameraController.fov(), blocksPerPixel,
+                minecraft.level.hasChunk(centerChunkX, centerChunkZ),
+                minecraft.level.hasChunk(camChunkX, camChunkZ),
+                minecraft.level.getSkyDarken(),
+                voxyRender,
+                data == null ? "null" : data.getDebugStatus());
     }
 
     private void drawTerrain3d(GuiGraphics g, int mapLeft, int mapTop, int mapDrawSize) {
@@ -574,103 +568,6 @@ public class MapScreen extends Screen {
         g.fill(cx, cy + 3, cx + 1, cy + 6, 0xAAFFFFFF);
     }
 
-    private void drawMapWaypoints(GuiGraphics g) {
-        if (minecraft == null || minecraft.level == null || VoxyMapClient.waypointManager == null) return;
-        String dimension = minecraft.level.dimension().identifier().toString();
-        List<Waypoint> waypoints = VoxyMapClient.waypointManager.all();
-        for (int i = 0; i < waypoints.size(); i++) {
-            Waypoint waypoint = waypoints.get(i);
-            if (!waypoint.dimension().equals(dimension)) continue;
-            WaypointProjection.ScreenPoint point = WaypointProjection.project(
-                    waypoint.x(), waypoint.y() + 2.0, waypoint.z(),
-                    minecraft.gameRenderer.getMainCamera(), VoxyMapCameraController.fov(), width, height
-            );
-            if (point != null) {
-                WaypointProjection.drawMarker(g, minecraft, waypoint, point);
-                if (i == selectedWaypointIndex) {
-                    g.fill(point.x() - 9, point.y() - 9, point.x() - 6, point.y() + 10, 0xFFFFFFFF);
-                    g.fill(point.x() + 7, point.y() - 9, point.x() + 10, point.y() + 10, 0xFFFFFFFF);
-                    g.fill(point.x() - 9, point.y() - 9, point.x() + 10, point.y() - 6, 0xFFFFFFFF);
-                    g.fill(point.x() - 9, point.y() + 7, point.x() + 10, point.y() + 10, 0xFFFFFFFF);
-                }
-            }
-        }
-    }
-
-    private void drawWaypointPanel(GuiGraphics g) {
-        Waypoint waypoint = selectedWaypoint();
-        if (waypoint == null) return;
-
-        if (waypointPanelHidden) {
-            int tabX = width - 44;
-            int tabY = height / 2 - 22;
-            g.fill(tabX, tabY, width - 10, tabY + 44, 0xAA030914);
-            g.fill(tabX, tabY, tabX + 2, tabY + 44, waypoint.color());
-            g.drawCenteredString(minecraft.font, "WP", tabX + 17, tabY + 17, 0xFFFFFFFF);
-            return;
-        }
-
-        int panelW = Math.min(250, Math.max(190, width / 7));
-        int panelH = 154;
-        int x = width - panelW - 18;
-        int y = height / 2 - panelH / 2;
-        g.fill(x - 2, y - 2, x + panelW + 2, y + panelH + 2, 0x553BA4FF);
-        g.fill(x, y, x + panelW, y + panelH, 0xDD030914);
-        g.fill(x, y, x + 3, y + panelH, waypoint.color());
-        g.drawString(minecraft.font, Component.translatable("screen.voxymap.waypoint.panel").getString(), x + 12, y + 10, 0xFFFFFFFF);
-        g.drawString(minecraft.font, (int) waypoint.x() + " / " + (int) waypoint.y() + " / " + (int) waypoint.z(), x + 12, y + 27, 0xFFBFD8FF);
-
-        selectedNameBoxX = x + 12;
-        selectedNameBoxY = y + 50;
-        selectedNameBoxW = panelW - 24;
-        selectedNameBoxH = 18;
-        g.drawString(minecraft.font, Component.translatable("screen.voxymap.waypoint.name").getString(), x + 12, y + 39, 0xFF9DB8D8);
-        g.fill(selectedNameBoxX, selectedNameBoxY, selectedNameBoxX + selectedNameBoxW, selectedNameBoxY + selectedNameBoxH, editingSelectedWaypointName ? 0xCC142235 : 0xAA101827);
-        g.fill(selectedNameBoxX, selectedNameBoxY + selectedNameBoxH - 1, selectedNameBoxX + selectedNameBoxW, selectedNameBoxY + selectedNameBoxH, editingSelectedWaypointName ? 0xFF72D7FF : 0xFF34506F);
-        String shownName = selectedWaypointNameDraft + (editingSelectedWaypointName && (System.currentTimeMillis() / 450L) % 2L == 0L ? "_" : "");
-        g.drawString(minecraft.font, shownName, selectedNameBoxX + 5, selectedNameBoxY + 5, 0xFFFFFFFF);
-
-        int saveX = x + 12;
-        int deleteX = x + 12;
-        int hideX = x + panelW - 58;
-        g.fill(saveX, y + 82, saveX + 86, y + 102, 0xCC135F3D);
-        g.fill(deleteX, y + 110, deleteX + 86, y + 130, 0xCC5F2431);
-        g.fill(hideX, y + 110, hideX + 44, y + 130, 0xAA20364A);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.save"), saveX + 43, y + 88, 0xFFFFFFFF);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.delete"), deleteX + 43, y + 116, 0xFFFFFFFF);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.hide"), hideX + 22, y + 116, 0xFFFFFFFF);
-    }
-
-    private void drawWaypointDialog(GuiGraphics g) {
-        if (!pendingWaypoint) return;
-
-        int boxW = Math.min(320, width - 40);
-        int boxH = 96;
-        int x = (width - boxW) / 2;
-        int y = (height - boxH) / 2;
-        g.fill(x - 2, y - 2, x + boxW + 2, y + boxH + 2, 0xAA3BA4FF);
-        g.fill(x, y, x + boxW, y + boxH, 0xEE030914);
-        g.fill(x, y, x + boxW, y + 2, 0xFF72D7FF);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.waypoint.add"), x + boxW / 2, y + 12, 0xFFFFFFFF);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.waypoint.name"), x + boxW / 2, y + 27, 0xFF9DB8D8);
-        int inputX = x + 26;
-        int inputY = y + 40;
-        g.fill(inputX, inputY, x + boxW - 26, inputY + 16, 0xAA101827);
-        g.fill(inputX, inputY + 15, x + boxW - 26, inputY + 16, 0xFF72D7FF);
-        String displayedName = pendingWaypointName + (((System.currentTimeMillis() / 450L) % 2L == 0L) ? "_" : "");
-        g.drawString(minecraft.font, displayedName, inputX + 5, inputY + 4, 0xFFFFFFFF);
-        String coords = (int) pendingWaypointX + " / " + (int) pendingWaypointY + " / " + (int) pendingWaypointZ;
-        g.drawCenteredString(minecraft.font, coords, x + boxW / 2, y + 58, 0xFF8EE6FF);
-
-        int yesX = x + 42;
-        int noX = x + boxW - 122;
-        int buttonY = y + 66;
-        g.fill(yesX, buttonY, yesX + 86, buttonY + 20, 0xCC135F3D);
-        g.fill(noX, buttonY, noX + 86, buttonY + 20, 0xCC5F2431);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.ok"), yesX + 43, buttonY + 6, 0xFFFFFFFF);
-        g.drawCenteredString(minecraft.font, Component.translatable("screen.voxymap.cancel"), noX + 43, buttonY + 6, 0xFFFFFFFF);
-    }
-
     private void drawBottomBar(GuiGraphics g, int mapLeft, int mapTop, int mapSize, int mx, int my) {
         int barY = mapTop + mapSize + 4;
         g.fill(mapLeft, barY, mapLeft + mapSize, barY + BOTTOM_BAR_HEIGHT, PANEL_BG);
@@ -740,41 +637,7 @@ public class MapScreen extends Screen {
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean isInside) {
-        if (pendingWaypoint) {
-            if (event.button() == GLFW.GLFW_MOUSE_BUTTON_1) {
-                int boxW = Math.min(320, width - 40);
-                int x = (width - boxW) / 2;
-                int y = (height - 96) / 2;
-                if (event.x() >= x + 42 && event.x() <= x + 128 && event.y() >= y + 66 && event.y() <= y + 86) {
-                    confirmWaypoint();
-                    return true;
-                }
-                if (event.x() >= x + boxW - 122 && event.x() <= x + boxW - 36 && event.y() >= y + 66 && event.y() <= y + 86) {
-                    pendingWaypoint = false;
-                    return true;
-                }
-            }
-            return true;
-        }
-
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_1) {
-            if (handleWaypointPanelClick(event.x(), event.y())) {
-                return true;
-            }
-            if (selectWaypointAt(event.x(), event.y())) {
-                return true;
-            }
-            long now = System.currentTimeMillis();
-            double clickDistance = Math.hypot(event.x() - lastLeftClickX, event.y() - lastLeftClickY);
-            if (now - lastLeftClickMillis <= DOUBLE_CLICK_WINDOW_MS && clickDistance < 16.0) {
-                prepareWaypointAtClick(event.x(), event.y());
-                lastLeftClickMillis = 0L;
-                dragging = false;
-                return true;
-            }
-            lastLeftClickMillis = now;
-            lastLeftClickX = event.x();
-            lastLeftClickY = event.y();
             dragging = true;
             dragStartMouseX = event.x();
             dragStartMouseY = event.y();
@@ -791,78 +654,6 @@ public class MapScreen extends Screen {
             return true;
         }
         return super.mouseClicked(event, isInside);
-    }
-
-    private boolean handleWaypointPanelClick(double mouseX, double mouseY) {
-        Waypoint waypoint = selectedWaypoint();
-        if (waypoint == null) return false;
-
-        if (waypointPanelHidden) {
-            int tabX = width - 44;
-            int tabY = height / 2 - 22;
-            if (mouseX >= tabX && mouseX <= width - 10 && mouseY >= tabY && mouseY <= tabY + 44) {
-                waypointPanelHidden = false;
-                return true;
-            }
-            return false;
-        }
-
-        int panelW = Math.min(250, Math.max(190, width / 7));
-        int panelH = 154;
-        int x = width - panelW - 18;
-        int y = height / 2 - panelH / 2;
-        if (mouseX < x || mouseX > x + panelW || mouseY < y || mouseY > y + panelH) return false;
-
-        if (mouseX >= selectedNameBoxX && mouseX <= selectedNameBoxX + selectedNameBoxW &&
-                mouseY >= selectedNameBoxY && mouseY <= selectedNameBoxY + selectedNameBoxH) {
-            editingSelectedWaypointName = true;
-            return true;
-        }
-        if (mouseX >= x + 12 && mouseX <= x + 98 && mouseY >= y + 82 && mouseY <= y + 102) {
-            saveSelectedWaypointName();
-            return true;
-        }
-        if (mouseX >= x + 12 && mouseX <= x + 98 && mouseY >= y + 110 && mouseY <= y + 130) {
-            VoxyMapClient.waypointManager.remove(selectedWaypointIndex);
-            selectedWaypointIndex = -1;
-            editingSelectedWaypointName = false;
-            return true;
-        }
-        if (mouseX >= x + panelW - 58 && mouseX <= x + panelW - 14 && mouseY >= y + 110 && mouseY <= y + 130) {
-            waypointPanelHidden = true;
-            editingSelectedWaypointName = false;
-            return true;
-        }
-        editingSelectedWaypointName = false;
-        return true;
-    }
-
-    private boolean selectWaypointAt(double mouseX, double mouseY) {
-        if (minecraft == null || minecraft.level == null || VoxyMapClient.waypointManager == null) return false;
-        String dimension = minecraft.level.dimension().identifier().toString();
-        List<Waypoint> waypoints = VoxyMapClient.waypointManager.all();
-        int bestIndex = -1;
-        double bestDistance = 14.0;
-        for (int i = 0; i < waypoints.size(); i++) {
-            Waypoint waypoint = waypoints.get(i);
-            if (!waypoint.dimension().equals(dimension)) continue;
-            WaypointProjection.ScreenPoint point = WaypointProjection.project(
-                    waypoint.x(), waypoint.y() + 2.0, waypoint.z(),
-                    minecraft.gameRenderer.getMainCamera(), VoxyMapCameraController.fov(), width, height
-            );
-            if (point == null) continue;
-            double distance = Math.hypot(point.x() - mouseX, point.y() - mouseY);
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                bestIndex = i;
-            }
-        }
-        if (bestIndex < 0) return false;
-        selectedWaypointIndex = bestIndex;
-        waypointPanelHidden = false;
-        editingSelectedWaypointName = false;
-        selectedWaypointNameDraft = waypoints.get(bestIndex).name();
-        return true;
     }
 
     @Override
@@ -904,50 +695,6 @@ public class MapScreen extends Screen {
     @Override
     public boolean keyPressed(KeyEvent event) {
         int keyCode = event.key();
-        if (pendingWaypoint) {
-            if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
-                confirmWaypoint();
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
-                if (!pendingWaypointName.isEmpty()) {
-                    pendingWaypointName = pendingWaypointName.substring(0, pendingWaypointName.length() - 1);
-                }
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_DELETE) {
-                pendingWaypointName = "";
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-                pendingWaypoint = false;
-                return true;
-            }
-            return true;
-        }
-        if (editingSelectedWaypointName) {
-            if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
-                saveSelectedWaypointName();
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
-                if (!selectedWaypointNameDraft.isEmpty()) {
-                    selectedWaypointNameDraft = selectedWaypointNameDraft.substring(0, selectedWaypointNameDraft.length() - 1);
-                }
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_DELETE) {
-                selectedWaypointNameDraft = "";
-                return true;
-            }
-            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-                editingSelectedWaypointName = false;
-                Waypoint waypoint = selectedWaypoint();
-                selectedWaypointNameDraft = waypoint == null ? "" : waypoint.name();
-                return true;
-            }
-            return true;
-        }
         if (keyCode == GLFW.GLFW_KEY_ESCAPE || VoxyMapClient.openMapKey.matches(event)) {
             onClose();
             return true;
@@ -989,138 +736,6 @@ public class MapScreen extends Screen {
             return true;
         }
         return super.keyPressed(event);
-    }
-
-    @Override
-    public boolean charTyped(CharacterEvent event) {
-        if (pendingWaypoint) {
-            if (event.isAllowedChatCharacter() && pendingWaypointName.length() < 32) {
-                pendingWaypointName += event.codepointAsString();
-            }
-            return true;
-        }
-        if (editingSelectedWaypointName) {
-            if (event.isAllowedChatCharacter() && selectedWaypointNameDraft.length() < 32) {
-                selectedWaypointNameDraft += event.codepointAsString();
-            }
-            return true;
-        }
-        return super.charTyped(event);
-    }
-
-    private void prepareWaypointAtClick(double mouseX, double mouseY) {
-        double[] hit = pickMapTerrain(mouseX, mouseY);
-        pendingWaypointX = hit[0];
-        pendingWaypointY = hit[1];
-        pendingWaypointZ = hit[2];
-        int next = VoxyMapClient.waypointManager == null ? 1 : VoxyMapClient.waypointManager.countInCurrentDimension(minecraft) + 1;
-        pendingWaypointName = Component.translatable("text.voxymap.default_waypoint", next).getString();
-        pendingWaypoint = true;
-    }
-
-    private double[] pickMapTerrain(double mouseX, double mouseY) {
-        if (minecraft == null || minecraft.level == null) {
-            return new double[]{viewCenterX, 64.0, viewCenterZ};
-        }
-
-        double yaw = Math.toRadians(VoxyMapCameraController.cameraYaw());
-        double pitch = Math.toRadians(VoxyMapCameraController.cameraPitch());
-        double tanHalfFov = Math.tan(Math.toRadians(VoxyMapCameraController.fov()) * 0.5);
-        double rayRight = (mouseX - width * 0.5) / (height * 0.5) * tanHalfFov;
-        double rayUp = -(mouseY - height * 0.5) / (height * 0.5) * tanHalfFov;
-
-        double forwardX = -Math.sin(yaw) * Math.cos(pitch);
-        double forwardY = -Math.sin(pitch);
-        double forwardZ = Math.cos(yaw) * Math.cos(pitch);
-        double rightX = Math.cos(yaw);
-        double rightZ = Math.sin(yaw);
-        double upX = Math.sin(yaw) * Math.sin(pitch);
-        double upY = Math.cos(pitch);
-        double upZ = -Math.cos(yaw) * Math.sin(pitch);
-
-        double dirX = forwardX + rightX * rayRight + upX * rayUp;
-        double dirY = forwardY + upY * rayUp;
-        double dirZ = forwardZ + rightZ * rayRight + upZ * rayUp;
-        double len = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
-        dirX /= len;
-        dirY /= len;
-        dirZ /= len;
-
-        double cameraX = VoxyMapCameraController.cameraX();
-        double cameraY = VoxyMapCameraController.cameraY();
-        double cameraZ = VoxyMapCameraController.cameraZ();
-        double bestX = viewCenterX;
-        double bestZ = viewCenterZ;
-        double bestY = resolveSurfaceY(Mth.floor(bestX), Mth.floor(bestZ), 64.0);
-
-        for (double t = 16.0; t <= 12000.0; t += 12.0) {
-            double x = cameraX + dirX * t;
-            double y = cameraY + dirY * t;
-            double z = cameraZ + dirZ * t;
-            double surface = resolveSurfaceY(Mth.floor(x), Mth.floor(z), Double.NaN);
-            if (Double.isNaN(surface)) {
-                continue;
-            }
-            if (y <= surface + 3.0) {
-                return new double[]{x, surface + 1.0, z};
-            }
-            bestX = x;
-            bestY = surface;
-            bestZ = z;
-        }
-
-        return new double[]{bestX, bestY + 1.0, bestZ};
-    }
-
-    private double resolveSurfaceY(int blockX, int blockZ, double fallbackY) {
-        if (data != null) {
-            Integer knownY = data.getKnownSurfaceY(minecraft, blockX, blockZ);
-            if (knownY != null) return knownY;
-        }
-        if (minecraft != null && minecraft.level != null && minecraft.level.hasChunk(blockX >> 4, blockZ >> 4)) {
-            return minecraft.level.getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
-        }
-        return fallbackY;
-    }
-
-    private void confirmWaypoint() {
-        if (minecraft == null || minecraft.level == null || VoxyMapClient.waypointManager == null) {
-            pendingWaypoint = false;
-            return;
-        }
-
-        String dimension = minecraft.level.dimension().identifier().toString();
-        String name = pendingWaypointName.trim();
-        if (name.isEmpty()) {
-            name = Component.translatable("text.voxymap.default_waypoint", VoxyMapClient.waypointManager.countInCurrentDimension(minecraft) + 1).getString();
-        }
-        VoxyMapClient.waypointManager.add(name, dimension, pendingWaypointX, pendingWaypointY, pendingWaypointZ);
-        if (minecraft.player != null) {
-            minecraft.player.displayClientMessage(Component.translatable("message.voxymap.waypoint_added", name), true);
-        }
-        pendingWaypoint = false;
-    }
-
-    private Waypoint selectedWaypoint() {
-        if (VoxyMapClient.waypointManager == null) return null;
-        List<Waypoint> waypoints = VoxyMapClient.waypointManager.all();
-        if (selectedWaypointIndex < 0 || selectedWaypointIndex >= waypoints.size()) {
-            selectedWaypointIndex = -1;
-            editingSelectedWaypointName = false;
-            return null;
-        }
-        return waypoints.get(selectedWaypointIndex);
-    }
-
-    private void saveSelectedWaypointName() {
-        if (VoxyMapClient.waypointManager == null || selectedWaypointIndex < 0) return;
-        String name = selectedWaypointNameDraft.trim();
-        if (name.isEmpty()) {
-            name = Component.translatable("text.voxymap.default_waypoint", selectedWaypointIndex + 1).getString();
-        }
-        VoxyMapClient.waypointManager.rename(selectedWaypointIndex, name);
-        selectedWaypointNameDraft = name;
-        editingSelectedWaypointName = false;
     }
 
     @Override

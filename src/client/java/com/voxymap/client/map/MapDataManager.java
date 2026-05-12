@@ -104,6 +104,9 @@ public class MapDataManager {
 
         var player = client.player;
         if (player == null) return;
+        if (client.level != null && isUnsupportedDimension(client.level.dimension().identifier().toString())) {
+            return;
+        }
 
         int playerBlockX = (int) player.getX();
         int playerBlockZ = (int) player.getZ();
@@ -192,6 +195,10 @@ public class MapDataManager {
             }
         }
         lastQueuedBatch = queued;
+    }
+
+    private static boolean isUnsupportedDimension(String dimension) {
+        return "minecraft:the_nether".equals(dimension) || "minecraft:the_end".equals(dimension);
     }
 
     /**
@@ -421,15 +428,15 @@ public class MapDataManager {
         int tileZ = blockToTile(blockZ);
         long tileKey = packTile(tileX, tileZ);
 
+        if (client != null && client.level != null && client.level.hasChunk(blockX >> 4, blockZ >> 4)) {
+            return client.level.getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
+        }
+
         Integer voxyHeight = tileHeights.get(tileKey);
         if (voxyHeight != null) return voxyHeight;
 
         Integer vanillaHeight = vanillaTileHeights.get(tileKey);
         if (vanillaHeight != null) return vanillaHeight;
-
-        if (client != null && client.level != null && client.level.hasChunk(blockX >> 4, blockZ >> 4)) {
-            return client.level.getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
-        }
 
         return null;
     }

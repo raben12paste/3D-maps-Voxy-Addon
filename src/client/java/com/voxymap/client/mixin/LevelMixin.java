@@ -16,6 +16,20 @@ public abstract class LevelMixin {
         }
     }
 
+    @Inject(method = "isDarkOutside", at = @At("HEAD"), cancellable = true)
+    private void voxymap$clearDarknessForMap(CallbackInfoReturnable<Boolean> cir) {
+        if (VoxyMapCameraController.isActive()) {
+            cir.setReturnValue(false);
+        }
+    }
+
+    @Inject(method = "getSkyDarken", at = @At("HEAD"), cancellable = true)
+    private void voxymap$clearSkyDarkenForMap(CallbackInfoReturnable<Integer> cir) {
+        if (VoxyMapCameraController.isActive()) {
+            cir.setReturnValue(0);
+        }
+    }
+
     @Inject(method = "getRainLevel", at = @At("HEAD"), cancellable = true)
     private void voxymap$clearRainForMap(float partialTick, CallbackInfoReturnable<Float> cir) {
         if (VoxyMapCameraController.isActive()) {
