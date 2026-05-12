@@ -11,12 +11,8 @@ https://modrinth.com/mod/3d-maps-voxy-addon
 - Full-screen 3D map opened with the `M` key.
 - Voxy-powered terrain data for long-range world previews.
 - Smooth camera movement, zoom, rotation, and centering on the player.
-- Waypoints visible both on the map and in normal gameplay.
-- Double-click on the map to create a waypoint.
-- Select a waypoint to rename, hide the waypoint panel, or delete it.
 - Polish and English translations.
 - Client command for debug logs: `/3dmaps debug on/off`.
-- Warning when Voxy is missing or when an untested Voxy version is detected.
 
 ## Requirements
 
@@ -41,7 +37,6 @@ VoxyMap is a client-side addon. It does not need to be installed on the server, 
 - `Shift` - move faster.
 - `Right mouse button` - rotate/look around.
 - `Mouse wheel` - zoom.
-- `Double left click` - create a waypoint.
 - `C` - center the map on the player.
 - `M` or `Esc` - close the map.
 
