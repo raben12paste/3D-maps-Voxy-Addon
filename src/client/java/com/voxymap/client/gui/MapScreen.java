@@ -1051,22 +1051,36 @@ public class MapScreen extends Screen {
         double cameraZ = VoxyMapCameraController.cameraZ();
         double bestX = viewCenterX;
         double bestZ = viewCenterZ;
-        double bestY = minecraft.level.getHeight(Heightmap.Types.WORLD_SURFACE, Mth.floor(bestX), Mth.floor(bestZ));
+        double bestY = resolveSurfaceY(Mth.floor(bestX), Mth.floor(bestZ), 64.0);
 
         for (double t = 16.0; t <= 12000.0; t += 12.0) {
             double x = cameraX + dirX * t;
             double y = cameraY + dirY * t;
             double z = cameraZ + dirZ * t;
-            int surface = minecraft.level.getHeight(Heightmap.Types.WORLD_SURFACE, Mth.floor(x), Mth.floor(z));
+            double surface = resolveSurfaceY(Mth.floor(x), Mth.floor(z), Double.NaN);
+            if (Double.isNaN(surface)) {
+                continue;
+            }
             if (y <= surface + 3.0) {
-                return new double[]{x, surface, z};
+                return new double[]{x, surface + 1.0, z};
             }
             bestX = x;
             bestY = surface;
             bestZ = z;
         }
 
-        return new double[]{bestX, bestY, bestZ};
+        return new double[]{bestX, bestY + 1.0, bestZ};
+    }
+
+    private double resolveSurfaceY(int blockX, int blockZ, double fallbackY) {
+        if (data != null) {
+            Integer knownY = data.getKnownSurfaceY(minecraft, blockX, blockZ);
+            if (knownY != null) return knownY;
+        }
+        if (minecraft != null && minecraft.level != null && minecraft.level.hasChunk(blockX >> 4, blockZ >> 4)) {
+            return minecraft.level.getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
+        }
+        return fallbackY;
     }
 
     private void confirmWaypoint() {

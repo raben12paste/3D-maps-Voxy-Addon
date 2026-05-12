@@ -4,6 +4,7 @@ import com.voxymap.client.VoxyMapClient;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -413,6 +414,24 @@ public class MapDataManager {
         if (voxyHeight != null) return voxyHeight;
         Integer vanillaHeight = vanillaTileHeights.get(tileKey);
         return vanillaHeight != null ? vanillaHeight : 63;
+    }
+
+    public Integer getKnownSurfaceY(Minecraft client, int blockX, int blockZ) {
+        int tileX = blockToTile(blockX);
+        int tileZ = blockToTile(blockZ);
+        long tileKey = packTile(tileX, tileZ);
+
+        Integer voxyHeight = tileHeights.get(tileKey);
+        if (voxyHeight != null) return voxyHeight;
+
+        Integer vanillaHeight = vanillaTileHeights.get(tileKey);
+        if (vanillaHeight != null) return vanillaHeight;
+
+        if (client != null && client.level != null && client.level.hasChunk(blockX >> 4, blockZ >> 4)) {
+            return client.level.getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
+        }
+
+        return null;
     }
 
     private int sampleLoadedWorldTile(Minecraft client, int tileX, int tileZ) {
