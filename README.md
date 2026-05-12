@@ -4,6 +4,8 @@
 
 The goal is to provide a large, cinematic world overview instead of a flat minimap: you can rotate the camera, zoom out, inspect terrain from far away, and manage visible waypoints.
 
+https://modrinth.com/mod/3d-maps-voxy-addon
+
 ## Features
 
 - Full-screen 3D map opened with the `M` key.
