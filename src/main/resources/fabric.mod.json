@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "voxymap",
+  "version": "${version}",
+  "name": "VoxyMap",
+  "icon": "assets/voxymap/icon.png",
+  "description": "Full-screen world map addon for Voxy LOD mod. Renders explored terrain using Voxy's LOD data.",
+  "authors": [
+    "raben12paste"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.voxymap.client.VoxyMapClient"
+    ]
+  },
+  "mixins": [
+    "voxymap.client.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "voxy": "*"
+  },
+  "custom": {
+    "modmenu": {
+      "links": {}
+    }
+  }
+}

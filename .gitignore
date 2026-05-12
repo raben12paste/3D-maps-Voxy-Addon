@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# Minecraft runtime folders
+run/
+logs/
+crash-reports/
+saves/
+screenshots/
+options.txt
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Local/generated archives
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store

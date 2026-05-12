@@ -1,0 +1,20 @@
+{
+  "key.voxymap.open_map": "Otwórz mapę Voxy",
+  "category.voxymap": "VoxyMap",
+  "screen.voxymap.title": "Mapa świata (VoxyMap)",
+  "screen.voxymap.waypoint.add": "Dodać waypoint?",
+  "screen.voxymap.waypoint.name": "Nazwa",
+  "screen.voxymap.ok": "ENTER / OK",
+  "screen.voxymap.cancel": "ESC / anuluj",
+  "screen.voxymap.save": "Zapisz",
+  "screen.voxymap.delete": "Usuń",
+  "screen.voxymap.hide": "Ukryj",
+  "screen.voxymap.waypoint.panel": "Wybrany waypoint",
+  "text.voxymap.default_waypoint": "Waypoint %s",
+  "message.voxymap.waypoint_added": "Dodano waypoint: %s",
+  "message.voxymap.voxy_missing": "Nie wykryto Voxy. VoxyMap potrzebuje Voxy do pełnego widoku mapy 3D.",
+  "overlay.voxymap.player": "Gracz",
+  "overlay.voxymap.camera": "Kamera",
+  "overlay.voxymap.zoom": "zoom",
+  "overlay.voxymap.keys": "WASD ruch  Shift szybko  PPM obrót  Scroll zoom  2x LPM waypoint  C centrum  M zamknij"
+}
