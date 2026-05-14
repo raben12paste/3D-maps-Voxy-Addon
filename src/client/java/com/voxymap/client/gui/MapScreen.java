@@ -48,6 +48,7 @@ public class MapScreen extends Screen {
     private static final double BASE_HEIGHT = 63.0;
     private static final boolean ALLOW_UNSAFE_NATIVE_VOXY_RENDERER = false;
     private static final long OPEN_ANIMATION_NANOS = 850_000_000L;
+    private static final long END_DEBUG_LOG_INTERVAL_MS = 3000L;
     private static boolean warnedUntestedVoxyVersion = false;
 
     // View state
@@ -98,6 +99,7 @@ public class MapScreen extends Screen {
             viewCenterZ = minecraft.player.getZ();
         }
         if (!isUnsupportedDimension()) {
+            VoxyBridge.suppressEnvironmentalFogForMap();
             syncWorldCamera();
         } else {
             VoxyMapCameraController.deactivate();
@@ -143,8 +145,12 @@ public class MapScreen extends Screen {
         }
 
         updateSmoothControls();
+        VoxyBridge.suppressEnvironmentalFogForMap();
         syncWorldCamera();
         if (isEndDimension()) {
+            if (VoxyMapClient.debugLogging && VoxyMapClient.mapDataManager != null) {
+                VoxyMapClient.mapDataManager.tick(minecraft);
+            }
             logEndRenderDebug();
         }
         drawWorldViewerOverlay(g);
@@ -220,7 +226,7 @@ public class MapScreen extends Screen {
     private boolean isUnsupportedDimension() {
         if (minecraft == null || minecraft.level == null) return false;
         String dimension = minecraft.level.dimension().identifier().toString();
-        return "minecraft:the_nether".equals(dimension) || "minecraft:the_end".equals(dimension);
+        return "minecraft:the_nether".equals(dimension);
     }
 
     private boolean isEndDimension() {
@@ -281,35 +287,51 @@ public class MapScreen extends Screen {
             return;
         }
         long now = System.currentTimeMillis();
-        if (now - lastEndDebugLog < 5000L) {
+        if (now - lastEndDebugLog < END_DEBUG_LOG_INTERVAL_MS) {
             return;
         }
         lastEndDebugLog = now;
-
-        String voxyRender = "unknown";
-        try {
-            Class<?> getterClass = Class.forName("me.cortex.voxy.client.core.IGetVoxyRenderSystem");
-            Object renderSystem = getterClass.getDeclaredMethod("getNullable").invoke(null);
-            voxyRender = renderSystem == null ? "null" : renderSystem.getClass().getName();
-        } catch (Throwable t) {
-            voxyRender = t.getClass().getSimpleName() + ":" + t.getMessage();
-        }
 
         int camChunkX = Mth.floor(VoxyMapCameraController.cameraX()) >> 4;
         int camChunkZ = Mth.floor(VoxyMapCameraController.cameraZ()) >> 4;
         int centerChunkX = Mth.floor(viewCenterX) >> 4;
         int centerChunkZ = Mth.floor(viewCenterZ) >> 4;
-        VoxyMapClient.LOGGER.info("[VoxyMap] end render debug: active={}, player=({}, {}, {}), center=({}, {}), camera=({}, {}, {}), yaw={}, pitch={}, fov={}, zoom={}, centerChunkLoaded={}, cameraChunkLoaded={}, skyDarken={}, voxyRender={}, data={}",
+        int loadedAroundCenter = countLoadedChunks(centerChunkX, centerChunkZ, 6);
+        int loadedAroundCamera = countLoadedChunks(camChunkX, camChunkZ, 6);
+        VoxyMapClient.LOGGER.info("[VoxyMap][EndDiag] render active={} dimension={} player=({}, {}, {}) center=({}, {}) camera=({}, {}, {}) yaw={} pitch={} fov={} zoom={} window={}x{} gui={}x{} centerChunkLoaded={} cameraChunkLoaded={} loadedChunks13x13(center/camera)={}/{} skyDarken={} minY={} maxY={} data={}",
                 VoxyMapCameraController.isActive(),
+                minecraft.level.dimension().identifier(),
                 (int) minecraft.player.getX(), (int) minecraft.player.getY(), (int) minecraft.player.getZ(),
                 (int) viewCenterX, (int) viewCenterZ,
                 (int) VoxyMapCameraController.cameraX(), (int) VoxyMapCameraController.cameraY(), (int) VoxyMapCameraController.cameraZ(),
                 VoxyMapCameraController.cameraYaw(), VoxyMapCameraController.cameraPitch(), VoxyMapCameraController.fov(), blocksPerPixel,
+                minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight(), width, height,
                 minecraft.level.hasChunk(centerChunkX, centerChunkZ),
                 minecraft.level.hasChunk(camChunkX, camChunkZ),
+                loadedAroundCenter,
+                loadedAroundCamera,
                 minecraft.level.getSkyDarken(),
-                voxyRender,
+                minecraft.level.getMinY(),
+                minecraft.level.getMaxY(),
                 data == null ? "null" : data.getDebugStatus());
+        VoxyMapClient.LOGGER.info("[VoxyMap][EndDiag] voxy {}", VoxyBridge.describeDiagnostics(minecraft));
+        VoxyMapClient.LOGGER.info("[VoxyMap][EndDiag] samples center={} player={} camera={}",
+                data == null ? "null" : data.describeAreaDiagnostics(minecraft, (int) viewCenterX, (int) viewCenterZ, 2),
+                data == null ? "null" : data.describeAreaDiagnostics(minecraft, (int) minecraft.player.getX(), (int) minecraft.player.getZ(), 2),
+                data == null ? "null" : data.describeAreaDiagnostics(minecraft, Mth.floor(VoxyMapCameraController.cameraX()), Mth.floor(VoxyMapCameraController.cameraZ()), 1));
+    }
+
+    private int countLoadedChunks(int centerChunkX, int centerChunkZ, int radius) {
+        if (minecraft == null || minecraft.level == null) return 0;
+        int loaded = 0;
+        for (int z = centerChunkZ - radius; z <= centerChunkZ + radius; z++) {
+            for (int x = centerChunkX - radius; x <= centerChunkX + radius; x++) {
+                if (minecraft.level.hasChunk(x, z)) {
+                    loaded++;
+                }
+            }
+        }
+        return loaded;
     }
 
     private void drawTerrain3d(GuiGraphics g, int mapLeft, int mapTop, int mapDrawSize) {
@@ -741,6 +763,7 @@ public class MapScreen extends Screen {
     @Override
     public void onClose() {
         VoxyMapCameraController.deactivate();
+        VoxyBridge.restoreEnvironmentalFogAfterMap();
         releaseTexture();
         super.onClose();
     }

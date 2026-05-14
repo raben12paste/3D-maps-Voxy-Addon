@@ -48,6 +48,7 @@ public class VoxyBridge {
     private static Method getMapperMethod;
     private static Method getBlockStateMethod; // Mapper.getBlockStateFromBlockId(int)
     private static Field worldEngineMapperfField;
+    private static Boolean previousEnvironmentalFog = null;
 
     // World identifier access
     private static Class<?> worldIdentifierClass;
@@ -172,6 +173,160 @@ public class VoxyBridge {
             LOGGER.debug("[VoxyMap] Error getting WorldEngine: {}", e.getMessage());
             return null;
         }
+    }
+
+    public static String describeDiagnostics(Minecraft client) {
+        StringBuilder out = new StringBuilder();
+        out.append("present=").append(VOXY_PRESENT)
+                .append(" version=").append(VOXY_VERSION)
+                .append(" tested=").append(isTestedVoxyVersion())
+                .append(" bridgeInit=").append(initialized)
+                .append(" bridgeFailed=").append(initFailed);
+
+        Object engine = getActiveWorldEngine(client);
+        Object mapper = getMapper(engine);
+        out.append(" engine=").append(simpleName(engine))
+                .append(" mapper=").append(simpleName(mapper));
+
+        describeActiveWorlds(out);
+        describeConfig(out);
+        describeRenderSystem(out);
+        return out.toString();
+    }
+
+    private static void describeActiveWorlds(StringBuilder out) {
+        if (!ensureInit()) return;
+        try {
+            Object voxyInstance = getInstanceMethod.invoke(null);
+            Field activeWorldsField = voxyInstance.getClass().getSuperclass().getDeclaredField("activeWorlds");
+            activeWorldsField.setAccessible(true);
+            Map<?, ?> activeWorlds = (Map<?, ?>) activeWorldsField.get(voxyInstance);
+            out.append(" activeWorlds=").append(activeWorlds.size()).append("[");
+            int shown = 0;
+            for (Map.Entry<?, ?> entry : activeWorlds.entrySet()) {
+                if (shown++ > 0) out.append(", ");
+                if (shown > 4) {
+                    out.append("...");
+                    break;
+                }
+                out.append(String.valueOf(entry.getKey())).append("=>").append(simpleName(entry.getValue()));
+            }
+            out.append("]");
+        } catch (Throwable t) {
+            out.append(" activeWorldsErr=").append(t.getClass().getSimpleName()).append(":").append(t.getMessage());
+        }
+    }
+
+    private static void describeConfig(StringBuilder out) {
+        try {
+            Class<?> configClass = Class.forName("me.cortex.voxy.client.config.VoxyConfig");
+            Object config = configClass.getField("CONFIG").get(null);
+            out.append(" config{")
+                    .append("enabled=").append(fieldValue(config, "enabled"))
+                    .append(",rendering=").append(fieldValue(config, "enableRendering"))
+                    .append(",ingest=").append(fieldValue(config, "ingestEnabled"))
+                    .append(",sectionDistance=").append(fieldValue(config, "sectionRenderDistance"))
+                    .append(",subdivision=").append(fieldValue(config, "subDivisionSize"))
+                    .append(",envFog=").append(fieldValue(config, "useEnvironmentalFog"))
+                    .append(",threads=").append(fieldValue(config, "serviceThreads"))
+                    .append("}");
+        } catch (Throwable t) {
+            out.append(" configErr=").append(t.getClass().getSimpleName()).append(":").append(t.getMessage());
+        }
+    }
+
+    public static void suppressEnvironmentalFogForMap() {
+        setEnvironmentalFog(false, true);
+    }
+
+    public static void restoreEnvironmentalFogAfterMap() {
+        if (previousEnvironmentalFog == null) return;
+        setEnvironmentalFog(previousEnvironmentalFog, false);
+        previousEnvironmentalFog = null;
+    }
+
+    private static void setEnvironmentalFog(boolean value, boolean rememberPrevious) {
+        try {
+            Class<?> configClass = Class.forName("me.cortex.voxy.client.config.VoxyConfig");
+            Object config = configClass.getField("CONFIG").get(null);
+            Field field = findField(config.getClass(), "useEnvironmentalFog");
+            field.setAccessible(true);
+            Object current = field.get(config);
+            if (rememberPrevious && previousEnvironmentalFog == null && current instanceof Boolean bool) {
+                previousEnvironmentalFog = bool;
+            }
+            if (current instanceof Boolean bool && bool == value) {
+                return;
+            }
+            field.setBoolean(config, value);
+            LOGGER.info("[VoxyMap] Voxy environmental fog {} for the 3D map.", value ? "restored" : "disabled");
+        } catch (Throwable t) {
+            LOGGER.debug("[VoxyMap] Could not change Voxy environmental fog: {}", t.toString());
+        }
+    }
+
+    private static void describeRenderSystem(StringBuilder out) {
+        try {
+            Class<?> getterClass = Class.forName("me.cortex.voxy.client.core.IGetVoxyRenderSystem");
+            Object renderSystem = getterClass.getDeclaredMethod("getNullable").invoke(null);
+            out.append(" renderSystem=").append(simpleName(renderSystem));
+            if (renderSystem == null) return;
+
+            Object tracker = fieldValueObject(renderSystem, "renderDistanceTracker");
+            out.append(" tracker=").append(simpleName(tracker));
+            if (tracker != null) {
+                out.append("{distance=").append(fieldValue(tracker, "renderDistance"))
+                        .append(",posX=").append(fieldValue(tracker, "posX"))
+                        .append(",posZ=").append(fieldValue(tracker, "posZ"))
+                        .append(",rate=").append(fieldValue(tracker, "processRate"))
+                        .append(",minSec=").append(fieldValue(tracker, "minSec"))
+                        .append(",maxSec=").append(fieldValue(tracker, "maxSec"))
+                        .append("}");
+            }
+
+            Object viewport = renderSystem.getClass().getDeclaredMethod("getViewport").invoke(renderSystem);
+            out.append(" viewport=").append(simpleName(viewport));
+            if (viewport != null) {
+                out.append("{frame=").append(fieldValue(viewport, "frameId"))
+                        .append(",size=").append(fieldValue(viewport, "width")).append("x").append(fieldValue(viewport, "height"))
+                        .append(",camera=").append(fieldValue(viewport, "cameraX")).append("/")
+                        .append(fieldValue(viewport, "cameraY")).append("/")
+                        .append(fieldValue(viewport, "cameraZ"))
+                        .append("}");
+            }
+        } catch (Throwable t) {
+            out.append(" renderErr=").append(t.getClass().getSimpleName()).append(":").append(t.getMessage());
+        }
+    }
+
+    private static String simpleName(Object value) {
+        return value == null ? "null" : value.getClass().getName();
+    }
+
+    private static Object fieldValueObject(Object target, String fieldName) throws ReflectiveOperationException {
+        Field field = findField(target.getClass(), fieldName);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
+    private static Object fieldValue(Object target, String fieldName) {
+        try {
+            return fieldValueObject(target, fieldName);
+        } catch (Throwable t) {
+            return "err:" + t.getClass().getSimpleName();
+        }
+    }
+
+    private static Field findField(Class<?> type, String fieldName) throws NoSuchFieldException {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(fieldName);
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(fieldName);
     }
 
     /**

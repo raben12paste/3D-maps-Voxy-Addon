@@ -19,9 +19,13 @@ public abstract class FogRendererMixin {
     @Shadow
     private GpuBuffer emptyBuffer;
 
-    @Inject(method = "setupFog", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "setupFog", at = @At("RETURN"), cancellable = true)
     private void voxymap$clearMapFog(Camera camera, int renderDistance, DeltaTracker deltaTracker, float skyDarken, ClientLevel level, CallbackInfoReturnable<Vector4f> cir) {
         if (VoxyMapCameraController.isActive()) {
+            if (level != null && "minecraft:the_end".equals(level.dimension().identifier().toString())) {
+                cir.setReturnValue(new Vector4f(0.02f, 0.015f, 0.035f, 1.0f));
+                return;
+            }
             cir.setReturnValue(new Vector4f(0.62f, 0.74f, 0.93f, 1.0f));
         }
     }

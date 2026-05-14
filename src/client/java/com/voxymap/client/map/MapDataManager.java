@@ -8,6 +8,8 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,7 +66,9 @@ public class MapDataManager {
     private final AtomicInteger sectionMisses = new AtomicInteger(0);
     private final AtomicInteger mapperMisses = new AtomicInteger(0);
     private final AtomicInteger vanillaColoredTiles = new AtomicInteger(0);
+    private final AtomicInteger scanGeneration = new AtomicInteger(0);
     private volatile int lastQueuedBatch = 0;
+    private volatile String activeDimensionId = "";
 
     // Tick counter for throttling
     private volatile int tickCounter = 0;
@@ -104,7 +108,11 @@ public class MapDataManager {
 
         var player = client.player;
         if (player == null) return;
-        if (client.level != null && isUnsupportedDimension(client.level.dimension().identifier().toString())) {
+        if (client.level == null) return;
+
+        String dimension = client.level.dimension().identifier().toString();
+        ensureDimension(dimension);
+        if (isUnsupportedDimension(dimension)) {
             return;
         }
 
@@ -176,12 +184,14 @@ public class MapDataManager {
                     int finalTileZ = tileZ;
                     long finalTileKey = tileKey;
                     int attemptTick = tickCounter;
+                    int generation = scanGeneration.get();
                     pendingTasks.incrementAndGet();
                     totalQueuedTiles.incrementAndGet();
                     queued++;
                     executor.submit(() -> {
                         try {
-                            ScanResult result = scanTile(worldEngine, mapper, finalTileX, finalTileZ, attemptTick);
+                            if (generation != scanGeneration.get()) return;
+                            ScanResult result = scanTile(worldEngine, mapper, finalTileX, finalTileZ, attemptTick, generation);
                             if (result == ScanResult.COLORED) coloredTiles.incrementAndGet();
                             if (result == ScanResult.EMPTY) emptyTiles.incrementAndGet();
                             if (result == ScanResult.MISSING_DATA) missingDataTiles.incrementAndGet();
@@ -198,14 +208,153 @@ public class MapDataManager {
     }
 
     private static boolean isUnsupportedDimension(String dimension) {
-        return "minecraft:the_nether".equals(dimension) || "minecraft:the_end".equals(dimension);
+        return "minecraft:the_nether".equals(dimension);
+    }
+
+    private void ensureDimension(String dimension) {
+        if (dimension == null || dimension.equals(activeDimensionId)) return;
+        String previous = activeDimensionId;
+        activeDimensionId = dimension;
+        resetScan();
+        if (VoxyMapClient.debugLogging) {
+            LOGGER.info("[VoxyMap] Dimension changed from '{}' to '{}'; cleared map cache and invalidated stale scan tasks.",
+                    previous.isEmpty() ? "<none>" : previous, dimension);
+        }
+    }
+
+    public String describeAreaDiagnostics(Minecraft client, int blockX, int blockZ, int tileRadius) {
+        if (client == null || client.level == null) return "no-client-level";
+        Object worldEngine = cachedWorldEngine;
+        Object mapper = cachedMapper;
+        if (worldEngine == null || mapper == null) {
+            worldEngine = VoxyBridge.getActiveWorldEngine(client);
+            mapper = VoxyBridge.getMapper(worldEngine);
+        }
+        if (worldEngine == null || mapper == null) {
+            return "engine=" + (worldEngine != null) + " mapper=" + (mapper != null);
+        }
+
+        int centerTileX = blockToTile(blockX);
+        int centerTileZ = blockToTile(blockZ);
+        AreaDebug debug = new AreaDebug();
+        for (int dz = -tileRadius; dz <= tileRadius; dz++) {
+            for (int dx = -tileRadius; dx <= tileRadius; dx++) {
+                debug.tiles++;
+                SampleDebug sample = sampleTileForDebug(client, worldEngine, mapper, centerTileX + dx, centerTileZ + dz);
+                debug.sectionHits += sample.sectionHits;
+                debug.sectionMisses += sample.sectionMisses;
+                debug.mapperMisses += sample.mapperMisses;
+                debug.nonAir += sample.nonAir;
+                debug.maxHeight = Math.max(debug.maxHeight, sample.topY);
+                debug.minHeight = Math.min(debug.minHeight, sample.topY);
+                if (!sample.sawSection) {
+                    debug.missing++;
+                } else if (sample.color != 0) {
+                    debug.colored++;
+                    debug.blockCounts.merge(sample.blockName, 1, Integer::sum);
+                } else {
+                    debug.empty++;
+                    if (sample.blockName != null) {
+                        debug.blockCounts.merge(sample.blockName, 1, Integer::sum);
+                    }
+                }
+            }
+        }
+
+        StringBuilder blocks = new StringBuilder();
+        int shown = 0;
+        for (Map.Entry<String, Integer> entry : debug.blockCounts.entrySet()) {
+            if (shown++ > 0) blocks.append(",");
+            if (shown > 8) {
+                blocks.append("...");
+                break;
+            }
+            blocks.append(entry.getKey()).append("=").append(entry.getValue());
+        }
+
+        return String.format("block=(%d,%d) tile=(%d,%d) radius=%d tiles=%d colored=%d empty=%d missing=%d sec=%d/%d mapperMiss=%d nonAir=%d y=%d..%d blocks={%s}",
+                blockX, blockZ, centerTileX, centerTileZ, tileRadius, debug.tiles, debug.colored, debug.empty,
+                debug.missing, debug.sectionHits, debug.sectionMisses, debug.mapperMisses, debug.nonAir,
+                debug.minHeight == Integer.MAX_VALUE ? 0 : debug.minHeight,
+                debug.maxHeight == Integer.MIN_VALUE ? 0 : debug.maxHeight,
+                blocks);
+    }
+
+    private SampleDebug sampleTileForDebug(Minecraft client, Object worldEngine, Object mapper, int tileX, int tileZ) {
+        SampleDebug result = new SampleDebug();
+        for (int lod = LOD_LEVEL; lod >= 0; lod--) {
+            sampleLodTileForDebug(client, worldEngine, mapper, tileX, tileZ, lod, result);
+            if (result.color != 0 || result.nonAir > 0) break;
+        }
+        return result;
+    }
+
+    private void sampleLodTileForDebug(Minecraft client, Object worldEngine, Object mapper, int tileX, int tileZ, int lod, SampleDebug result) {
+        int childScale = 1 << (LOD_LEVEL - lod);
+        int baseSecX = tileX * childScale;
+        int baseSecZ = tileZ * childScale;
+        int sectionSize = 32 << lod;
+        int minSecY = Math.floorDiv(client.level.getMinY(), sectionSize);
+        int maxSecY = Math.floorDiv(client.level.getMaxY() - 1, sectionSize);
+
+        for (int secY = maxSecY; secY >= minSecY; secY--) {
+            for (int childZ = 0; childZ < childScale; childZ++) {
+                for (int childX = 0; childX < childScale; childX++) {
+                    sampleSectionForDebug(worldEngine, mapper, lod, baseSecX + childX, secY, baseSecZ + childZ, sectionSize, result);
+                    if (result.color != 0 || result.nonAir > 128) return;
+                }
+            }
+        }
+    }
+
+    private void sampleSectionForDebug(Object worldEngine, Object mapper, int lod, int secX, int secY, int secZ, int sectionSize, SampleDebug result) {
+        long[] data = VoxyBridge.getSectionData(worldEngine, lod, secX, secY, secZ);
+        if (data == null) {
+            result.sectionMisses++;
+            return;
+        }
+
+        result.sawSection = true;
+        result.sectionHits++;
+        int sectionBaseY = secY * sectionSize;
+        int step = 1 << lod;
+
+        for (int localY = 31; localY >= 0; localY--) {
+            int worldY = sectionBaseY + localY * step;
+            for (int localZ = 0; localZ < 32; localZ += 2) {
+                for (int localX = 0; localX < 32; localX += 2) {
+                    int dataIdx = VoxyBridge.getSectionIndex(localX, localY, localZ);
+                    if (dataIdx >= data.length) continue;
+                    long entry = data[dataIdx];
+                    if (VoxyBridge.isAir(entry)) continue;
+
+                    result.nonAir++;
+                    int blockId = VoxyBridge.getBlockId(entry);
+                    BlockState state = VoxyBridge.getBlockState(mapper, blockId);
+                    if (state == null) {
+                        result.mapperMisses++;
+                        continue;
+                    }
+                    if (state.isAir()) continue;
+
+                    int rawColor = BlockColorTable.getMapColor(state);
+                    result.topY = Math.max(result.topY, worldY);
+                    result.blockName = state.getBlock().toString();
+                    if ((rawColor & 0xFF000000) != 0) {
+                        result.color = BlockColorTable.applyHeightShading(rawColor, worldY, 63);
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     /**
      * Scan a single LOD tile and extract its surface color.
      * A "tile" at LOD level 1 covers 64x64 blocks.
      */
-    private ScanResult scanTile(Object worldEngine, Object mapper, int tileX, int tileZ, int attemptTick) {
+    private ScanResult scanTile(Object worldEngine, Object mapper, int tileX, int tileZ, int attemptTick, int generation) {
+        if (generation != scanGeneration.get()) return ScanResult.FAILED;
         long tileKey = packTile(tileX, tileZ);
         if (tileColors.containsKey(tileKey)) return ScanResult.EMPTY;
 
@@ -216,6 +365,8 @@ public class MapDataManager {
             scanLodTile(worldEngine, mapper, tileX, tileZ, lod, scan);
             if (scan.bestColor != 0) break;
         }
+
+        if (generation != scanGeneration.get()) return ScanResult.FAILED;
 
         if (!scan.sawSection) {
             missingRetryAfterTick.put(tileKey, attemptTick + MISSING_RETRY_DELAY_TICKS);
@@ -295,6 +446,7 @@ public class MapDataManager {
      * Force re-scan of all tiles (e.g., when opening map or player teleports far).
      */
     public void resetScan() {
+        scanGeneration.incrementAndGet();
         synchronized (this) {
             java.util.Arrays.fill(tileScanned, false);
             java.util.Arrays.fill(tileQueued, false);
@@ -481,9 +633,35 @@ public class MapDataManager {
         FAILED
     }
 
+    private static final class AreaDebug {
+        private int tiles;
+        private int colored;
+        private int empty;
+        private int missing;
+        private int sectionHits;
+        private int sectionMisses;
+        private int mapperMisses;
+        private int nonAir;
+        private int minHeight = Integer.MAX_VALUE;
+        private int maxHeight = Integer.MIN_VALUE;
+        private final Map<String, Integer> blockCounts = new HashMap<>();
+    }
+
+    private static final class SampleDebug {
+        private boolean sawSection;
+        private int sectionHits;
+        private int sectionMisses;
+        private int mapperMisses;
+        private int nonAir;
+        private int color;
+        private int topY = Integer.MIN_VALUE;
+        private String blockName;
+    }
+
     private static final class SurfaceScan {
         private boolean sawSection = false;
         private int bestColor = 0x00000000;
         private int bestHeight = Integer.MIN_VALUE;
     }
+
 }

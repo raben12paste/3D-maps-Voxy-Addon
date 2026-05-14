@@ -81,7 +81,7 @@ public class VoxyMapClient implements ClientModInitializer {
                                         .executes(context -> {
                                             debugLogging = true;
                                             LOGGER.info("[VoxyMap] Debug logging enabled by client command.");
-                                            context.getSource().sendFeedback(Component.literal("VoxyMap debug logging enabled."));
+                                            context.getSource().sendFeedback(Component.literal("VoxyMap debug logging enabled. End map diagnostics are now active."));
                                             return 1;
                                         }))
                                 .then(ClientCommandManager.literal("off")
