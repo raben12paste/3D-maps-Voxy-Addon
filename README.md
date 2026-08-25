@@ -1,4 +1,7 @@
-# 3D Maps Voxy Addon
+
+# Hey, the mod will no longer be supported by me due to time constraints, but if someone wants to support it, I have nothing against it.
+
+## 3D Maps Voxy Addon
 
 3D Maps Voxy Addon, also packaged as **VoxyMap**, is a client-side Fabric mod that adds a full-screen 3D world map powered by Voxy LOD data.
 
