@@ -1,5 +1,5 @@
 plugins {
-	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 	id 'maven-publish'
 }
 
@@ -32,14 +32,25 @@ loom {
 	}
 }
 
+// A locally built Voxy jar (libs/voxy-*.jar) wins over the Modrinth artifact, for
+// Voxy builds that are not published yet.
+def localVoxyJars = fileTree("libs") { include "voxy-*.jar" }
+
+// Minecraft 26.x ships deobfuscated, so Loom is used without mappings and
+// without remapping: the names we compile against are the names at runtime.
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings loom.officialMojangMappings()
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	modCompileOnly "maven.modrinth:voxy:0.2.15-beta"
-	modCompileOnly "maven.modrinth:iris:1.10.7+1.21.11-fabric"
-	modCompileOnly "xaero.map:xaeroworldmap-fabric-1.21.11:1.40.16"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Optional integrations, present at compile time only.
+	if (localVoxyJars.isEmpty()) {
+		clientCompileOnly "maven.modrinth:voxy:${project.voxy_version}"
+	} else {
+		clientCompileOnly localVoxyJars
+	}
+	clientCompileOnly "maven.modrinth:iris:${project.iris_version}"
+	clientCompileOnly "xaero.map:xaeroworldmap-fabric-${project.minecraft_version}:${project.xaero_worldmap_version}"
 }
 
 processResources {
@@ -51,33 +62,24 @@ processResources {
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+	it.options.release = 25
 }
 
 java {
 	withSourcesJar()
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
 }
 
 jar {
 	inputs.property "projectName", project.name
-	exclude("net/minecraft/client/gui/GuiGraphicsExtractor.class")
 	from("LICENSE") {
 		rename { "${it}_${project.name}" }
 	}
 }
 
-tasks.register("officialRuntimeJar", Jar) {
-	dependsOn "classes", "clientClasses"
-	archiveFileName = "${project.name}-${project.version}.jar"
-	destinationDirectory = layout.buildDirectory.dir("libs")
-	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-	from(sourceSets.main.output)
-	from(sourceSets.client.output)
-	exclude("net/minecraft/client/gui/GuiGraphicsExtractor.class")
-	from("LICENSE") {
-		rename { "${it}_${project.name}" }
-	}
+// Kept so the historical `./gradlew officialRuntimeJar` command still works.
+// Without remapping, the plain `jar` task already produces the runtime jar.
+tasks.register("officialRuntimeJar") {
+	dependsOn tasks.named("jar")
 }

@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value = VoxyRenderSystem.class, remap = false)
 public abstract class VoxyRenderSystemMixin {
     @Inject(method = "renderOpaque", at = @At("HEAD"), cancellable = true, remap = false)
-    private void voxymap$renderOnlyInMapGui(Viewport<?> viewport, CallbackInfo ci) {
+    private void voxymap$renderOnlyInMapGui(Viewport<?> viewport, int depthTexture, int colorTexture, CallbackInfo ci) {
         if (VoxyMapGuiRenderer.shouldCancelWorldRender()) {
             ci.cancel();
         }

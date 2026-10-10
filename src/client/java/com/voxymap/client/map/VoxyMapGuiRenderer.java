@@ -1,25 +1,30 @@
 package com.voxymap.client.map;
 
-import com.mojang.blaze3d.opengl.GlTexture;
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.backend.opengl.GlTextureView;
 import com.voxymap.client.VoxyMapClient;
-import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import net.fabricmc.loader.api.FabricLoader;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.minecraft.client.Minecraft;
-import org.lwjgl.opengl.GL11C;
-import org.lwjgl.opengl.GL30C;
+import org.joml.Vector4f;
 
+/**
+ * Draws the Voxy LOD world straight into the main render target just before the GUI is
+ * rendered. This is only used when an Iris shader pack is active, because the shader
+ * pipeline cannot render the detached map camera during the normal world pass.
+ */
 public final class VoxyMapGuiRenderer {
+    /** Minecraft uses a reversed depth buffer, so "far" is 0.0. */
+    private static final double CLEAR_DEPTH = 0.0;
+    private static final Vector4f CLEAR_COLOR = new Vector4f(0.03f, 0.03f, 0.06f, 1.0f);
+
     private static boolean active;
     private static boolean rendering;
-    private static int framebuffer;
-    private static int colorTexture;
-    private static int depthTexture;
-    private static int framebufferWidth;
-    private static int framebufferHeight;
 
     private VoxyMapGuiRenderer() {
     }
@@ -58,7 +63,6 @@ public final class VoxyMapGuiRenderer {
         rendering = false;
         active = false;
         restoreRenderer(minecraft);
-        releaseFramebuffer();
     }
 
     public static void render(Minecraft minecraft) {
@@ -66,7 +70,7 @@ public final class VoxyMapGuiRenderer {
             return;
         }
 
-        VoxyRenderSystem renderer = IGetVoxyRenderSystem.getNullable();
+        VoxyRenderSystem renderer = IVoxyRenderSystemHolder.getNullable();
         if (renderer == null) {
             return;
         }
@@ -76,86 +80,37 @@ public final class VoxyMapGuiRenderer {
             return;
         }
 
-        RenderTarget renderTarget = minecraft.getMainRenderTarget();
-        if (!(renderTarget.getColorTexture() instanceof GlTexture color) || !(renderTarget.getDepthTexture() instanceof GlTexture depth)) {
+        RenderTarget renderTarget = minecraft.gameRenderer.mainRenderTarget();
+        if (renderTarget.width <= 0 || renderTarget.height <= 0) {
+            return;
+        }
+        if (!(renderTarget.getColorTextureView() instanceof GlTextureView colorView)
+                || !(renderTarget.getDepthTextureView() instanceof GlTextureView depthView)) {
             return;
         }
 
-        int width = renderTarget.width;
-        int height = renderTarget.height;
-        int colorId = color.glId();
-        int depthId = depth.glId();
-        if (width <= 0 || height <= 0 || colorId == 0 || depthId == 0 || !ensureFramebuffer(width, height, colorId, depthId)) {
+        int colorId = colorView.glId();
+        int depthId = depthView.glId();
+        if (colorId == 0 || depthId == 0) {
             return;
         }
 
-        int previousDrawFramebuffer = GL11C.glGetInteger(GL30C.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadFramebuffer = GL11C.glGetInteger(GL30C.GL_READ_FRAMEBUFFER_BINDING);
-        int[] previousViewport = new int[4];
-        GL11C.glGetIntegerv(GL11C.GL_VIEWPORT, previousViewport);
+        CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
+        encoder.clearColorAndDepthTextures(renderTarget.getColorTexture(), CLEAR_COLOR, renderTarget.getDepthTexture(), CLEAR_DEPTH);
 
+        rendering = true;
         try {
-            GL30C.glBindFramebuffer(GL30C.GL_FRAMEBUFFER, framebuffer);
-            GL11C.glViewport(0, 0, width, height);
-            GL11C.glClearColor(0.03f, 0.03f, 0.06f, 1.0f);
-            GL11C.glClear(GL11C.GL_COLOR_BUFFER_BIT | GL11C.GL_DEPTH_BUFFER_BIT);
-
-            rendering = true;
-            renderer.renderOpaque(viewport);
-            GL11C.glClear(GL11C.GL_DEPTH_BUFFER_BIT);
+            renderer.renderOpaque(viewport, depthId, colorId);
         } finally {
             rendering = false;
-            GL30C.glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30C.glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            GL11C.glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
-        }
-    }
-
-    private static boolean ensureFramebuffer(int width, int height, int colorId, int depthId) {
-        if (framebuffer != 0 && framebufferWidth == width && framebufferHeight == height && colorTexture == colorId && depthTexture == depthId) {
-            return true;
         }
 
-        releaseFramebuffer();
-
-        framebufferWidth = width;
-        framebufferHeight = height;
-        colorTexture = colorId;
-        depthTexture = depthId;
-        framebuffer = GL30C.glGenFramebuffers();
-
-        int previousDrawFramebuffer = GL11C.glGetInteger(GL30C.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadFramebuffer = GL11C.glGetInteger(GL30C.GL_READ_FRAMEBUFFER_BINDING);
-
-        GL30C.glBindFramebuffer(GL30C.GL_FRAMEBUFFER, framebuffer);
-        GL30C.glFramebufferTexture2D(GL30C.GL_FRAMEBUFFER, GL30C.GL_COLOR_ATTACHMENT0, GL11C.GL_TEXTURE_2D, colorTexture, 0);
-        GL30C.glFramebufferTexture2D(GL30C.GL_FRAMEBUFFER, GL30C.GL_DEPTH_ATTACHMENT, GL11C.GL_TEXTURE_2D, depthTexture, 0);
-
-        boolean complete = GL30C.glCheckFramebufferStatus(GL30C.GL_FRAMEBUFFER) == GL30C.GL_FRAMEBUFFER_COMPLETE;
-
-        GL30C.glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-        GL30C.glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-
-        if (!complete) {
-            releaseFramebuffer();
-        }
-
-        return complete;
-    }
-
-    private static void releaseFramebuffer() {
-        if (framebuffer != 0) {
-            GL30C.glDeleteFramebuffers(framebuffer);
-            framebuffer = 0;
-        }
-        colorTexture = 0;
-        depthTexture = 0;
-        framebufferWidth = 0;
-        framebufferHeight = 0;
+        // The GUI is drawn on top of the map, so the depth written by Voxy has to go.
+        RenderSystem.getDevice().createCommandEncoder().clearDepthTexture(renderTarget.getDepthTexture(), CLEAR_DEPTH);
     }
 
     private static void rebuildRenderer(Minecraft minecraft) {
-        IGetVoxyRenderSystem levelRenderer = (IGetVoxyRenderSystem) minecraft.levelRenderer;
+        IVoxyRenderSystemHolder levelRenderer = (IVoxyRenderSystemHolder) minecraft.levelRenderer;
         levelRenderer.voxy$shutdownRenderer();
         levelRenderer.voxy$createRenderer();
     }

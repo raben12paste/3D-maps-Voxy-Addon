@@ -11,6 +11,7 @@
   "overlay.voxymap.player": "Gracz",
   "overlay.voxymap.camera": "Kamera",
   "overlay.voxymap.zoom": "zoom",
+  "overlay.voxymap.player_distance": "%s m",
   "overlay.voxymap.xaero": "Mapa 2D Xaero",
   "overlay.voxymap.xaero.transition": "Otwieranie Xaero World Map...",
   "overlay.voxymap.return_3d": "VoxyMap 3D",

@@ -11,6 +11,7 @@
   "overlay.voxymap.player": "\u0418\u0433\u0440\u043e\u043a",
   "overlay.voxymap.camera": "\u041a\u0430\u043c\u0435\u0440\u0430",
   "overlay.voxymap.zoom": "\u0437\u0443\u043c",
+  "overlay.voxymap.player_distance": "%s \u043c",
   "overlay.voxymap.xaero": "2D-\u043a\u0430\u0440\u0442\u0430 Xaero",
   "overlay.voxymap.xaero.transition": "\u041e\u0442\u043a\u0440\u044b\u0442\u0438\u0435 Xaero World Map...",
   "overlay.voxymap.return_3d": "VoxyMap 3D",

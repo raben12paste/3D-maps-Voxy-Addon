@@ -49,7 +49,7 @@ public final class XaeroWorldMapBridge {
             }
 
             Screen screen = new xaero.map.gui.GuiMap(null, null, mapProcessor, client.player);
-            client.setScreen(screen);
+            client.gui.setScreen(screen);
             return true;
         }
     }

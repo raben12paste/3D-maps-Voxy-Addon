@@ -22,6 +22,9 @@ options.txt
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
 
+# Released mod jars are committed on purpose
+!dist/*.jar
+
 # OS files
 Thumbs.db
 desktop.ini
